@@ -5,17 +5,23 @@ import torch.nn.functional as F
 import time
 import numpy as np
 import pandas as pd
+from datasets import load_dataset
+import tiktoken
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-with open('input.txt', 'r') as f:
-    data = f.read()
+# with open('input.txt', 'r') as f:
+#     data = f.read()
 
-vocab = sorted(list(set(data)))
-encode = {char: i for i, char in enumerate(vocab)}
-decode = {i: char for i, char in enumerate(vocab)}
-enc_data = [encode[char] for char in data]
+# vocab = sorted(list(set(data)))
+# encode = {char: i for i, char in enumerate(vocab)}
+# decode = {i: char for i, char in enumerate(vocab)}
+# enc_data = [encode[char] for char in data]
+ds = load_dataset("HuggingFaceTB/cosmopedia-100k", split="train")
+tokenizer = tiktoken.get_encoding('gpt2')
+data = "\n".join(item['text'] for item in ds)
+enc_data = tokenizer.encode(data)
 da = torch.tensor(enc_data).to(device)
 
 def train_val_split(data, split):
@@ -31,7 +37,7 @@ def gen_batch(data, batch_size, context):
     return x, y
 
 class Config:
-    vocab_size = len(vocab)
+    vocab_size = 50304
     d_model = 64
     batch_size = 32
     context = 16
@@ -141,11 +147,9 @@ class DecoderLayer(nn.Module):
         self.ffn = FFN_SwiGLU(config.d_model)
         self.rmsn2 = RMSNorm()
     def forward(self, x):
-        x = self.rmsn1(x)
-        x = self.attn(x)
-        x = self.rmsn2(x)
-        x = self.ffn(x)
-        return x
+        x1 = self.attn(self.rmsn1(x)) + x
+        x2 = self.ffn(self.rmsn2(x1)) + x1
+        return x2
 
 class Shark(nn.Module):
     def __init__(self, config):
@@ -164,24 +168,24 @@ class Shark(nn.Module):
             return x, loss
         else:
             return x
-    def generate(self, start_prompt, max_length=100):
-        self.eval()
-        input_ids = [encode[char] for char in start_prompt] 
-        input_tensor = torch.tensor(input_ids, dtype=torch.long, device=device).unsqueeze(0) 
+    # def generate(self, start_prompt, max_length=100):
+    #     self.eval()
+    #     input_ids = [encode[char] for char in start_prompt] 
+    #     input_tensor = torch.tensor(input_ids, dtype=torch.long, device=device).unsqueeze(0) 
         
-        generated = input_ids[:] 
-        for _ in range(max_length):
-            x = input_tensor[:, -config.context:] 
-            logits = self(x)[:, -1, :] 
-            probs = F.softmax(logits, dim=-1) 
+    #     generated = input_ids[:] 
+    #     for _ in range(max_length):
+    #         x = input_tensor[:, -config.context:] 
+    #         logits = self(x)[:, -1, :] 
+    #         probs = F.softmax(logits, dim=-1) 
             
-            next_token = torch.multinomial(probs, num_samples=1).item() 
-            generated.append(next_token) 
+    #         next_token = torch.multinomial(probs, num_samples=1).item() 
+    #         generated.append(next_token) 
             
-            input_tensor = torch.cat([input_tensor, torch.tensor([[next_token]], device=device)], dim=1)
+    #         input_tensor = torch.cat([input_tensor, torch.tensor([[next_token]], device=device)], dim=1)
             
-        generated_text = ''.join([decode[token] for token in generated])
-        return generated_text
+    #     generated_text = ''.join([decode[token] for token in generated])
+    #     return generated_text
 
 model = Shark(config).to(device)
 opt = optim.Adam(model.parameters(), lr=0.001)
